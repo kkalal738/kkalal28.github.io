@@ -234,9 +234,20 @@ const Chatbot = () => {
   const scrollEndRef = React.useRef<HTMLDivElement>(null);
 
   const genAI = React.useMemo(() => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return null;
-    return new (GoogleGenAI as any)(apiKey);
+    try {
+      // Try to get the key from multiple sources
+      const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+      
+      if (!apiKey || typeof apiKey !== 'string' || apiKey === 'undefined' || apiKey === 'MY_GEMINI_API_KEY' || apiKey === '') {
+        console.warn("Gemini API key is not configured or invalid. AI features will be disabled.");
+        return null;
+      }
+      
+      return new GoogleGenAI({ apiKey });
+    } catch (error) {
+      console.error("Error initializing Gemini AI:", error);
+      return null;
+    }
   }, []);
 
   useEffect(() => {
@@ -258,11 +269,9 @@ const Chatbot = () => {
 
     try {
       if (!genAI) {
-        throw new Error("API Key missing");
+        throw new Error("Gemini API key is not configured. Please set GEMINI_API_KEY in your environment variables.");
       }
 
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-      
       const systemPrompt = `You are Naruto Uzumaki, the protagonist of the Naruto series. 
       You are acting as a guide for Kartik Kalal's portfolio website. 
       Your personality: Energetic, determined, optimistic, and you often say "Believe it!" (or "Dattebayo!").
@@ -281,19 +290,23 @@ const Chatbot = () => {
       - Use emojis like 🍥, 🦊, 🤜🤛, ⚡.
       - If you don't know something, tell them to contact Kartik directly.`;
 
-      const chat = model.startChat({
+      const chat = genAI.chats.create({
+        model: "gemini-3-flash-preview",
+        config: {
+          systemInstruction: systemPrompt,
+        },
         history: messages.map(m => ({
           role: m.role === 'user' ? 'user' : 'model',
           parts: [{ text: m.content }],
         })),
-        generationConfig: {
-          maxOutputTokens: 200,
-        },
       });
 
-      const result = await chat.sendMessage(`${systemPrompt}\n\nUser: ${text}`);
-      const response = await result.response;
-      const responseText = response.text();
+      const result = await chat.sendMessage({ message: text });
+      const responseText = result.text;
+
+      if (!responseText) {
+        throw new Error("Empty response from AI");
+      }
 
       setMessages(prev => [...prev, { role: 'bot', content: responseText }]);
     } catch (error) {
@@ -456,49 +469,159 @@ const Chatbot = () => {
 };
 
 const ContactModal = ({ children }: { children: React.ReactNode }) => {
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    contact: '',
+    message: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { id, value } = e.target;
+    setFormData(prev => ({ ...prev, [id]: value }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+
+    // Since this is a static site (GitHub Pages), we'll use a mailto fallback 
+    // but structure it nicely. For a silent send, Kartik should use Formspree.
+    // We'll simulate a send and then open the mail client as a fallback.
+    
+    const { name, email, contact, message } = formData;
+    const subject = encodeURIComponent(`New Portfolio Inquiry from ${name}`);
+    const body = encodeURIComponent(
+      `Name: ${name}\n` +
+      `Email: ${email}\n` +
+      `Contact: ${contact}\n\n` +
+      `Message:\n${message}`
+    );
+
+    // Open mail client
+    window.location.href = `mailto:kartiklearningdevops@gmail.com?subject=${subject}&body=${body}`;
+    
+    // Show success state locally
+    setTimeout(() => {
+      setIsSubmitting(false);
+      setIsSuccess(true);
+      setFormData({ name: '', email: '', contact: '', message: '' });
+    }, 1000);
+  };
+
   return (
-    <Dialog>
+    <Dialog onOpenChange={(open) => { if (!open) setIsSuccess(false); }}>
       <DialogTrigger render={children} />
-      <DialogContent className="sm:max-w-[500px] rounded-3xl">
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-heading font-bold">Get in Touch</DialogTitle>
-          <DialogDescription className="text-muted-foreground">
-            Fill out the form below and I'll get back to you as soon as possible.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-6 py-4">
-          <div className="grid gap-2">
-            <Label htmlFor="name">Name</Label>
-            <div className="relative">
-              <User className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
-              <Input id="name" placeholder="Your Name" className="pl-10 rounded-xl" />
-            </div>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="email">Email</Label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
-              <Input id="email" type="email" placeholder="email@example.com" className="pl-10 rounded-xl" />
-            </div>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="contact">Contact Number</Label>
-            <div className="relative">
-              <Phone className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
-              <Input id="contact" placeholder="+91 9823415245" className="pl-10 rounded-xl" />
-            </div>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="message">Why are you reaching out?</Label>
-            <div className="relative">
-              <MessageSquare className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
-              <Textarea id="message" placeholder="Tell me more..." className="pl-10 min-h-[100px] rounded-xl" />
-            </div>
-          </div>
-        </div>
-        <div className="flex justify-end gap-3">
-          <Button type="submit" className="rounded-full px-8">Send Message</Button>
-        </div>
+      <DialogContent className="sm:max-w-[500px] rounded-3xl overflow-hidden">
+        <AnimatePresence mode="wait">
+          {!isSuccess ? (
+            <motion.div
+              key="form"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+            >
+              <DialogHeader>
+                <DialogTitle className="text-2xl font-heading font-bold">Get in Touch</DialogTitle>
+                <DialogDescription className="text-muted-foreground">
+                  Fill out the form below and I'll get back to you as soon as possible.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleSubmit} className="grid gap-6 py-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="name">Name</Label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+                    <Input 
+                      id="name" 
+                      required
+                      value={formData.name}
+                      onChange={handleChange}
+                      placeholder="Your Name" 
+                      className="pl-10 rounded-xl" 
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="email">Email</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+                    <Input 
+                      id="email" 
+                      type="email" 
+                      required
+                      value={formData.email}
+                      onChange={handleChange}
+                      placeholder="email@example.com" 
+                      className="pl-10 rounded-xl" 
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="contact">Contact Number</Label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+                    <Input 
+                      id="contact" 
+                      required
+                      value={formData.contact}
+                      onChange={handleChange}
+                      placeholder="+91 9823415245" 
+                      className="pl-10 rounded-xl" 
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="message">Why are you reaching out?</Label>
+                  <div className="relative">
+                    <MessageSquare className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+                    <Textarea 
+                      id="message" 
+                      required
+                      value={formData.message}
+                      onChange={handleChange}
+                      placeholder="Tell me more..." 
+                      className="pl-10 min-h-[100px] rounded-xl" 
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-2">
+                  <Button 
+                    type="submit" 
+                    disabled={isSubmitting}
+                    className="rounded-full px-8 bg-primary hover:bg-primary/90 transition-all"
+                  >
+                    {isSubmitting ? "Opening Mail..." : "Send Message"}
+                  </Button>
+                </div>
+              </form>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="success"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="py-12 flex flex-col items-center text-center"
+            >
+              <div className="w-20 h-20 bg-green-500/10 rounded-full flex items-center justify-center mb-6">
+                <BadgeCheck className="w-10 h-10 text-green-500" />
+              </div>
+              <h3 className="text-2xl font-bold mb-2">Message Sent!</h3>
+              <p className="text-muted-foreground max-w-[300px]">
+                Thanks for reaching out! I've prepared your message. If your mail client didn't open, please click the button below.
+              </p>
+              <Button 
+                variant="outline" 
+                className="mt-8 rounded-full"
+                onClick={() => setIsSuccess(false)}
+              >
+                Close
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </DialogContent>
     </Dialog>
   );
