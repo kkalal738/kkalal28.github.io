@@ -23,10 +23,18 @@ jobs:
       - name: Install dependencies
         run: npm install
       - name: Build
-        run: npm run build
+        run: |
+          # Detect if it's a user page (username.github.io) or a project page
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          if [[ "$REPO_NAME" == *.github.io ]]; then
+            export VITE_BASE="/"
+          else
+            export VITE_BASE="/$REPO_NAME/"
+          fi
+          echo "Building with VITE_BASE=$VITE_BASE"
+          VITE_BASE=$VITE_BASE npm run build
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          VITE_BASE: ${{ vars.VITE_BASE || '/' }}
       - name: Setup Pages
         uses: actions/configure-pages@v4
       - name: Upload artifact

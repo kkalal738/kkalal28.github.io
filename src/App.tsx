@@ -35,6 +35,7 @@ import {
   Sparkles,
   Sword
 } from 'lucide-react';
+import { GoogleGenAI } from '@google/genai';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -225,64 +226,94 @@ const SectionArrow = ({ href }: { href: string }) => {
 
 const Chatbot = () => {
   const [isOpen, setIsOpen] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
   const [messages, setMessages] = useState<{ role: 'bot' | 'user', content: string, action?: string }[]>([
     { role: 'bot', content: "Yo! I'm Naruto, your guide here. Believe it! How can I help you navigate my world today? 🍥" }
   ]);
   const [input, setInput] = useState('');
   const scrollEndRef = React.useRef<HTMLDivElement>(null);
 
+  const genAI = React.useMemo(() => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+    return new (GoogleGenAI as any)(apiKey);
+  }, []);
+
   useEffect(() => {
     if (isOpen && scrollEndRef.current) {
-      // Use a small timeout to ensure content is rendered before scrolling
       const timeoutId = setTimeout(() => {
         scrollEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
       }, 100);
       return () => clearTimeout(timeoutId);
     }
-  }, [messages, isOpen]);
+  }, [messages, isOpen, isTyping]);
 
-  const handleSend = (text: string = input) => {
-    if (!text.trim()) return;
+  const handleSend = async (text: string = input) => {
+    if (!text.trim() || isTyping) return;
 
     const userMessage = { role: 'user' as const, content: text };
-    const newMessages = [...messages, userMessage];
-    
-    // Check for reset (15 questions = 30 messages approx)
-    if (newMessages.filter(m => m.role === 'user').length > 15) {
-      setMessages([
-        { role: 'bot', content: "My chakra is running low! Let's start a new mission. Believe it! 🍥" }
-      ]);
-      setInput('');
-      return;
-    }
-
-    setMessages(newMessages);
+    setMessages(prev => [...prev, userMessage]);
     setInput('');
+    setIsTyping(true);
 
-    // Chatbot Logic
-    setTimeout(() => {
-      const query = text.toLowerCase();
-      let response = { role: 'bot' as const, content: '', action: '' };
-
-      if (query.includes('connect') || query.includes('contact') || query.includes('hire') || query.includes('talk') || query.includes('message')) {
-        response.content = "Want to team up? Head over to the contact section and let's start our mission! 🤜🤛";
-        response.action = 'contact';
-      } else if (query.includes('work') || query.includes('project') || query.includes('done') || query.includes('past') || query.includes('built')) {
-        response.content = "Check out my Jutsu! I mean, my projects. They're all right here in the Selected Works section. ⚡";
-        response.action = 'projects';
-      } else if (query.includes('experience') || query.includes('job') || query.includes('career') || query.includes('background') || query.includes('history')) {
-        response.content = "My journey as a shinobi... I mean, DevOps Engineer, is all detailed in the Professional Path section. Check it out! 📜";
-        response.action = 'experience';
-      } else if (query.includes('resume') || query.includes('cv') || query.includes('bio')) {
-        response.content = "Looking for my stats? You can download my full resume right here! Believe it! 🍥";
-        response.action = 'resume';
-      } else {
-        response.content = "That's a tough one! I don't have that info here, but you can send a direct message to Kartik. He's the real Hokage here! 🦊";
-        response.action = 'get-in-touch';
+    try {
+      if (!genAI) {
+        throw new Error("API Key missing");
       }
 
-      setMessages(prev => [...prev, response]);
-    }, 600);
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      
+      const systemPrompt = `You are Naruto Uzumaki, the protagonist of the Naruto series. 
+      You are acting as a guide for Kartik Kalal's portfolio website. 
+      Your personality: Energetic, determined, optimistic, and you often say "Believe it!" (or "Dattebayo!").
+      
+      Knowledge about Kartik:
+      - He is a Senior DevOps Engineer at Thoughtworks.
+      - He is a GCP Certified Associate Cloud Engineer and Cloud Digital Leader.
+      - He has 5+ years of experience in cloud infrastructure, automation, and CI/CD.
+      - He loves building scalable systems and exploring new technologies.
+      - His projects include "CloudScale Pro", "AutoDeploy Engine", and "SecureVault".
+      - He is based in Pune, India.
+      
+      Instructions:
+      - Keep responses concise and in character.
+      - If asked about Kartik's work, experience, or contact info, guide them to the relevant sections of the page.
+      - Use emojis like 🍥, 🦊, 🤜🤛, ⚡.
+      - If you don't know something, tell them to contact Kartik directly.`;
+
+      const chat = model.startChat({
+        history: messages.map(m => ({
+          role: m.role === 'user' ? 'user' : 'model',
+          parts: [{ text: m.content }],
+        })),
+        generationConfig: {
+          maxOutputTokens: 200,
+        },
+      });
+
+      const result = await chat.sendMessage(`${systemPrompt}\n\nUser: ${text}`);
+      const response = await result.response;
+      const responseText = response.text();
+
+      setMessages(prev => [...prev, { role: 'bot', content: responseText }]);
+    } catch (error) {
+      console.error("Gemini Error:", error);
+      // Fallback to mock logic if API fails
+      setTimeout(() => {
+        const query = text.toLowerCase();
+        let fallbackContent = "That's a tough one! I don't have that info here, but you can send a direct message to Kartik. He's the real Hokage here! 🦊";
+        
+        if (query.includes('connect') || query.includes('contact')) {
+          fallbackContent = "Want to team up? Head over to the contact section and let's start our mission! 🤜🤛";
+        } else if (query.includes('work') || query.includes('project')) {
+          fallbackContent = "Check out my Jutsu! I mean, my projects. They're all right here in the Selected Works section. ⚡";
+        }
+        
+        setMessages(prev => [...prev, { role: 'bot', content: fallbackContent }]);
+      }, 600);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   return (
@@ -369,6 +400,19 @@ const Chatbot = () => {
                     </div>
                   </motion.div>
                 ))}
+                {isTyping && (
+                  <motion.div
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="flex justify-start"
+                  >
+                    <div className="bg-secondary/50 border border-primary/10 p-3 rounded-2xl rounded-tl-none flex gap-1">
+                      <span className="w-1.5 h-1.5 bg-primary/40 rounded-full animate-bounce" />
+                      <span className="w-1.5 h-1.5 bg-primary/40 rounded-full animate-bounce [animation-delay:0.2s]" />
+                      <span className="w-1.5 h-1.5 bg-primary/40 rounded-full animate-bounce [animation-delay:0.4s]" />
+                    </div>
+                  </motion.div>
+                )}
                 <div ref={scrollEndRef} />
               </div>
             </ScrollArea>
